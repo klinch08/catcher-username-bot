@@ -1,5 +1,4 @@
 __pycache__/
 *.pyc
-state.json
 bot.log
 token.txt

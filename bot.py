@@ -13,7 +13,6 @@ import checker
 import config
 import keepalive
 import names
-import state
 
 API = "https://api.telegram.org/bot" + config.BOT_TOKEN + "/"
 
@@ -213,6 +212,8 @@ PATTERN_ICONS = {
     "rand": ICON_DICE,
 }
 
+DEFAULT_PATTERN = "mix"
+
 
 def btn(text, data, style=None):
     """style: success - зелёная, primary - синяя, danger - красная (Bot API 9.4)."""
@@ -222,42 +223,71 @@ def btn(text, data, style=None):
     return button
 
 
-def kb_menu():
+def pack(action, arg, pattern, word):
+    """Настройки едут прямо в кнопке.
+
+    Так бот не зависит от диска: Render стирает файлы при каждом
+    перезапуске, а кнопки живут в сообщении и переживают что угодно.
+    Лимит callback_data - 64 байта, наши поля в него укладываются.
+    """
+    return ":".join((action, str(arg), pattern, word))
+
+
+def unpack(data):
+    """Разобрать callback_data обратно."""
+    parts = (data.split(":") + ["", "", ""])[:4]
+    action, arg, pattern, word = parts
+    if pattern not in PATTERN_TITLES:
+        pattern = DEFAULT_PATTERN
+    return action, arg, pattern, word
+
+
+def kb_menu(pattern, word):
     return [
-        [btn(PAD + ICON_SEARCH + " Поиск" + PAD, "menu:search", "success")],
-        [btn(PAD + ICON_GEAR + " Фильтры" + PAD, "menu:filters")],
+        [btn(PAD + ICON_SEARCH + " Поиск" + PAD,
+             pack("go", "search", pattern, word), "success")],
+        [btn(PAD + ICON_GEAR + " Фильтры" + PAD,
+             pack("go", "filters", pattern, word))],
     ]
 
 
-def kb_search():
+def kb_search(pattern, word):
     return [
-        [btn("5 символов", "search:5"), btn("6 символов", "search:6")],
-        [btn(PAD + ICON_GEAR + " Фильтры" + PAD, "menu:filters")],
-        [btn(PAD + ICON_BACK + " В меню" + PAD, "menu:main")],
+        [btn("5 символов", pack("run", 5, pattern, word)),
+         btn("6 символов", pack("run", 6, pattern, word))],
+        [btn(PAD + ICON_GEAR + " Фильтры" + PAD,
+             pack("go", "filters", pattern, word))],
+        [btn(PAD + ICON_BACK + " В меню" + PAD,
+             pack("go", "main", pattern, word))],
     ]
 
 
-def kb_filters(user):
+def kb_filters(pattern, word):
     rows = []
     for key, title in PATTERN_TITLES.items():
-        if key == "anagram" and user["word"]:
-            title += " (%s)" % user["word"]
-        icon = ICON_CHECK if user["pattern"] == key else PATTERN_ICONS.get(key)
+        if key == "anagram" and word:
+            title += " (%s)" % word
+        icon = ICON_CHECK if pattern == key else PATTERN_ICONS.get(key)
         rows.append([btn(("%s %s" % (icon, title)) if icon else title,
-                         "pattern:" + key)])
-    rows.append([btn(ICON_REFRESH + " Сбросить настройки", "reset:")])
-    rows.append([btn(PAD + ICON_BACK + " В меню" + PAD, "menu:main")])
+                         pack("set", key, pattern, word))])
+    rows.append([btn(ICON_REFRESH + " Сбросить настройки",
+                     pack("set", DEFAULT_PATTERN, DEFAULT_PATTERN, ""))])
+    rows.append([btn(PAD + ICON_BACK + " В меню" + PAD,
+                     pack("go", "main", pattern, word))])
     return rows
 
 
-def kb_back():
-    return [[btn(PAD + ICON_BACK + " В меню" + PAD, "menu:main")]]
+def kb_back(pattern, word):
+    return [[btn(PAD + ICON_BACK + " В меню" + PAD,
+                 pack("go", "main", pattern, word))]]
 
 
-def kb_results(length):
+def kb_results(length, pattern, word):
     return [
-        [btn(PAD + ICON_REFRESH + " Ещё раз" + PAD, "search:%d" % length, "primary")],
-        [btn(PAD + ICON_BACK + " В меню" + PAD, "menu:main")],
+        [btn(PAD + ICON_REFRESH + " Ещё раз" + PAD,
+             pack("run", length, pattern, word), "primary")],
+        [btn(PAD + ICON_BACK + " В меню" + PAD,
+             pack("go", "main", pattern, word))],
     ]
 
 
@@ -321,14 +351,13 @@ def format_results(free, checked, spent, errors):
     return text
 
 
-def do_search(chat_id, user_id, length, message_id=None):
+def do_search(chat_id, length, pattern, word, message_id=None):
     """Крутить пачки, пока не выйдет время или не наберётся MAX_FOUND ников."""
-    user = state.get(user_id)
-    anagram_of = user["word"] if user["pattern"] == "anagram" else None
+    anagram_of = word if pattern == "anagram" else None
 
-    if user["pattern"] == "anagram" and not anagram_of:
+    if pattern == "anagram" and not anagram_of:
         show(chat_id, "filters", "Сначала пришли слово: Фильтры, «Из своего слова».",
-             kb_filters(user), message_id)
+             kb_filters(pattern, word), message_id)
         return
 
     if anagram_of:
@@ -350,7 +379,7 @@ def do_search(chat_id, user_id, length, message_id=None):
         while (time.time() - started < config.DURATION
                and len(free) < config.MAX_FOUND):
             pool = (names.anagrams(anagram_of, config.BATCH) if anagram_of
-                    else names.generate(length, user["pattern"], config.BATCH))
+                    else names.generate(length, pattern, config.BATCH))
             batch = [n for n in pool if n not in seen]
             if not batch:
                 # генератор выдохся: либо варианты кончились, либо фильтр
@@ -359,7 +388,7 @@ def do_search(chat_id, user_id, length, message_id=None):
                     show(chat_id, "results",
                          "Этот фильтр не даёт подходящих ников.\n"
                          "Выбери другой в настройках.",
-                         kb_results(length), message_id)
+                         kb_results(length, pattern, word), message_id)
                     return
                 break
             seen.update(batch)
@@ -379,7 +408,8 @@ def do_search(chat_id, user_id, length, message_id=None):
     free.sort(key=names.readability, reverse=True)
     text = format_results(free[:config.MAX_FOUND], checked,
                           time.time() - started, errors)
-    show(chat_id, "results", text, kb_results(length), message_id)
+    show(chat_id, "results", text, kb_results(length, pattern, word),
+         message_id)
 
 
 def set_anagram_word(chat_id, user_id, raw, message_id=None):
@@ -399,15 +429,15 @@ def set_anagram_word(chat_id, user_id, raw, message_id=None):
 
     if problem:
         pending[user_id] = "anagram_word"
-        show(chat_id, "anagram", problem + "\n\nПришли другое слово.", kb_back())
+        show(chat_id, "anagram", problem + "\n\nПришли другое слово.",
+             kb_back("anagram", ""))
         return
 
-    state.set_value(user_id, "word", word)
     example = ", ".join(names.anagrams(word, 3))
     show(chat_id, "filters",
          "Готово, слово «%s». Например: %s\n\n"
          "Теперь жми Поиск - переберу перестановки и покажу свободные."
-         % (word, example), kb_filters(state.get(user_id)))
+         % (word, example), kb_filters("anagram", word))
 
 
 # --------------------------------------------------------------------- обработчики
@@ -428,14 +458,13 @@ def handle_message(msg):
         set_anagram_word(chat_id, user_id, text)
         return
 
-    show(chat_id, "menu", TEXT_MENU, kb_menu())
+    show(chat_id, "menu", TEXT_MENU, kb_menu(DEFAULT_PATTERN, ""))
 
 
 def handle_callback(query):
     chat_id = query["message"]["chat"]["id"]
     message_id = query["message"]["message_id"]
     user_id = query["from"]["id"]
-    data = query.get("data", "")
     if not allowed(user_id):
         return
 
@@ -444,33 +473,26 @@ def handle_callback(query):
     except Exception:
         pass
 
-    action, _, arg = data.partition(":")
+    action, arg, pattern, word = unpack(query.get("data", ""))
 
-    if action == "menu":
+    if action == "go":
         if arg == "main":
-            show(chat_id, "menu", TEXT_MENU, kb_menu(), message_id)
+            show(chat_id, "menu", TEXT_MENU, kb_menu(pattern, word), message_id)
         elif arg == "search":
-            show(chat_id, "search", TEXT_SEARCH, kb_search(), message_id)
+            show(chat_id, "search", TEXT_SEARCH, kb_search(pattern, word), message_id)
         elif arg == "filters":
-            show(chat_id, "filters", TEXT_FILTERS,
-                 kb_filters(state.get(user_id)), message_id)
+            show(chat_id, "filters", TEXT_FILTERS, kb_filters(pattern, word),
+                 message_id)
 
-    elif action == "search":
-        run_bg(do_search, chat_id, user_id, int(arg), message_id)
+    elif action == "run":
+        run_bg(do_search, chat_id, int(arg), pattern, word, message_id)
 
-    elif action == "pattern":
-        state.set_value(user_id, "pattern", arg)
+    elif action == "set":
         if arg == "anagram":
             pending[user_id] = "anagram_word"
-            show(chat_id, "anagram", TEXT_ANAGRAM, kb_back(), message_id)
+            show(chat_id, "anagram", TEXT_ANAGRAM, kb_back(arg, word), message_id)
         else:
-            show(chat_id, "filters", TEXT_FILTERS,
-                 kb_filters(state.get(user_id)), message_id)
-
-    elif action == "reset":
-        state.reset(user_id)
-        show(chat_id, "filters", "Настройки сброшены.\n\n" + TEXT_FILTERS,
-             kb_filters(state.get(user_id)), message_id)
+            show(chat_id, "filters", TEXT_FILTERS, kb_filters(arg, word), message_id)
 
 
 # --------------------------------------------------------------------------- запуск
@@ -479,7 +501,6 @@ def main():
     if not config.BOT_TOKEN:
         log("Нет токена: положи его в token.txt или в переменную BOT_TOKEN")
         return
-    state.load()
     load_photo_cache()
     # на хостингах-веб-сервисах нужна заглушка, которую будет дёргать пингер
     if os.environ.get("PORT"):
