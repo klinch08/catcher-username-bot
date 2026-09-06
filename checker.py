@@ -2,14 +2,13 @@
 """Проверка занятости ника по публичной странице t.me."""
 
 import re
-import threading
-import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 import config
 import fragment
+import ratelimit
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
@@ -48,19 +47,7 @@ RESERVED_NAMES = {
     "notoscam", "stickers", "themes", "gifs", "video", "photo", "file",
 }
 
-_last_request = 0.0
-_rate_lock = threading.Lock()
-
-
-def _throttle():
-    """Общий на все потоки лимит: не больше config.RATE_LIMIT запросов в секунду."""
-    global _last_request
-    gap = 1.0 / max(config.RATE_LIMIT, 0.1)
-    with _rate_lock:
-        wait = gap - (time.time() - _last_request)
-        if wait > 0:
-            time.sleep(wait)
-        _last_request = time.time()
+_limiter = ratelimit.Limiter(config.RATE_LIMIT)
 
 
 def _kind(html, name):
@@ -87,7 +74,7 @@ def check(name):
     if name in RESERVED_NAMES:
         return RESERVED, None
 
-    _throttle()
+    _limiter.acquire()
     req = urllib.request.Request("https://t.me/" + name, headers={"User-Agent": UA})
     try:
         html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "ignore")
