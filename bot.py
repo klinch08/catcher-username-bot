@@ -313,7 +313,7 @@ def kb_filters(pattern, word):
         rows.append([btn(("%s %s" % (icon, title)) if icon else title,
                          pack("set", key, pattern, word))])
     rows.append([btn(ICON_REFRESH + " Сбросить настройки",
-                     pack("set", DEFAULT_PATTERN, DEFAULT_PATTERN, ""))])
+                     pack("reset", "", pattern, word))])
     rows.append([btn(PAD + ICON_BACK + " В меню" + PAD,
                      pack("go", "main", pattern, word))])
     return rows
@@ -521,6 +521,10 @@ def handle_callback(query):
         answer(query["id"], "Фильтр «%s» уже выбран" % PATTERN_TITLES[arg], True)
         return
 
+    if action == "reset" and pattern == DEFAULT_PATTERN and not word:
+        answer(query["id"], "Настройки и так стоят по умолчанию", True)
+        return
+
     answer(query["id"])
 
     if action == "go":
@@ -534,6 +538,10 @@ def handle_callback(query):
 
     elif action == "run":
         run_bg(do_search, chat_id, int(arg), pattern, word, message_id)
+
+    elif action == "reset":
+        show(chat_id, "filters", "Настройки сброшены.\n\n" + TEXT_FILTERS,
+             kb_filters(DEFAULT_PATTERN, ""), message_id)
 
     elif action == "set":
         if arg == "anagram":
