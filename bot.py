@@ -40,6 +40,10 @@ pending = {}
 _log_lock = threading.Lock()
 _photo_ids = {}
 
+# Единственное сообщение бота в каждом чате: chat_id -> message_id.
+# Всё происходит внутри него, новые сообщения не плодим.
+_last_msg = {}
+
 
 def log(*parts):
     """Пишем и в консоль, и в bot.log."""
@@ -119,12 +123,32 @@ def send_text(chat_id, text, keyboard=None):
         log("send failed:", e)
 
 
+def remember(chat_id, resp):
+    """Запомнить id только что отправленного сообщения."""
+    msg_id = ((resp or {}).get("result") or {}).get("message_id")
+    if msg_id:
+        _last_msg[chat_id] = msg_id
+    return msg_id
+
+
+def drop_message(chat_id, message_id):
+    """Убрать сообщение из чата. В личке боту разрешено удалять и чужие."""
+    try:
+        api("deleteMessage", chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass   # старше 48 часов или уже удалено - не беда
+
+
 def show(chat_id, screen, text, keyboard=None, message_id=None):
     """Показать экран: картинка-шапка плюс текст под ней.
 
     Первый раз картинка заливается файлом, дальше используется file_id.
     Если сообщение уже есть - меняем в нём и картинку, и подпись.
     """
+    # если экран вызван без привязки - правим то сообщение, что уже висит
+    if message_id is None:
+        message_id = _last_msg.get(chat_id)
+
     path = photo_path(screen)
     markup = {"inline_keyboard": keyboard} if keyboard else None
     # у подписи к фото лимит 1024 символа
@@ -157,6 +181,7 @@ def show(chat_id, screen, text, keyboard=None, message_id=None):
                     save_photo_cache()
             else:
                 edit_caption(chat_id, message_id, text, keyboard)
+            _last_msg[chat_id] = message_id
             return message_id
         except Exception as e:
             log("editMessageMedia:", e)   # не вышло - шлём новое
@@ -173,13 +198,13 @@ def show(chat_id, screen, text, keyboard=None, message_id=None):
                 _photo_ids[screen] = sizes[-1]["file_id"]
                 save_photo_cache()
         else:
-            return (send_text(chat_id, text, keyboard) or {}).get(
-                "result", {}).get("message_id")
-        return resp["result"]["message_id"]
+            return remember(chat_id, send_text(chat_id, text, keyboard))
+        new_id = resp["result"]["message_id"]
+        _last_msg[chat_id] = new_id
+        return new_id
     except Exception as e:
         log("show failed:", e)
-        return (send_text(chat_id, text, keyboard) or {}).get(
-            "result", {}).get("message_id")
+        return remember(chat_id, send_text(chat_id, text, keyboard))
 
 
 def edit_caption(chat_id, message_id, text, keyboard=None):
@@ -452,6 +477,10 @@ def handle_message(msg):
     text = msg.get("text", "").strip()
     if not allowed(user_id):
         return
+
+    # убираем написанное пользователем: в чате должно висеть
+    # ровно одно сообщение - наше
+    drop_message(chat_id, msg["message_id"])
 
     want = pending.pop(user_id, None)
     if want == "anagram_word" and not text.startswith("/"):
