@@ -1,0 +1,13 @@
+# Конфиг для Render. Бесплатный тариф даёт только веб-сервисы, поэтому бот
+# поднимает заглушку на порту PORT - её и будет дёргать пингер, не давая
+# сервису уснуть.
+services:
+  - type: web
+    name: catcher-username-bot
+    runtime: python
+    plan: free
+    buildCommand: ""
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
