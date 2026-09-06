@@ -123,6 +123,18 @@ def send_text(chat_id, text, keyboard=None):
         log("send failed:", e)
 
 
+def answer(query_id, text=None, alert=False):
+    """Ответить на нажатие кнопки. С текстом - всплывашкой поверх чата."""
+    params = {"callback_query_id": query_id}
+    if text:
+        params["text"] = text
+        params["show_alert"] = "true" if alert else "false"
+    try:
+        api("answerCallbackQuery", **params)
+    except Exception:
+        pass
+
+
 def remember(chat_id, resp):
     """Запомнить id только что отправленного сообщения."""
     msg_id = ((resp or {}).get("result") or {}).get("message_id")
@@ -184,6 +196,11 @@ def show(chat_id, screen, text, keyboard=None, message_id=None):
             _last_msg[chat_id] = message_id
             return message_id
         except Exception as e:
+            # содержимое совпало с текущим - Telegram отвечает ошибкой,
+            # но сообщение на месте, и новое слать не надо
+            if "not modified" in str(e):
+                _last_msg[chat_id] = message_id
+                return message_id
             log("editMessageMedia:", e)   # не вышло - шлём новое
 
     try:
@@ -497,12 +514,14 @@ def handle_callback(query):
     if not allowed(user_id):
         return
 
-    try:
-        api("answerCallbackQuery", callback_query_id=query["id"])
-    except Exception:
-        pass
-
     action, arg, pattern, word = unpack(query.get("data", ""))
+
+    # нажали на уже выбранный фильтр - незачем перерисовывать экран
+    if action == "set" and arg == pattern and arg != "anagram":
+        answer(query["id"], "Фильтр «%s» уже выбран" % PATTERN_TITLES[arg], True)
+        return
+
+    answer(query["id"])
 
     if action == "go":
         if arg == "main":
