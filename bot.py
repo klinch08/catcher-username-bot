@@ -327,9 +327,19 @@ def kb_filters(pattern, word, origin="main"):
 
 
 def kb_back(pattern, word, origin="main"):
-    """Возврат с экрана анаграмм - обратно в фильтры, откуда сюда и пришли."""
-    return [[btn(PAD + ICON_BACK + " Вернуться к фильтрам" + PAD,
-                 pack("go", "filters", pattern, word, origin))]]
+    """Клавиатура экрана анаграмм.
+
+    Если слово уже задавали, даём взять его снова - иначе пришлось бы
+    набирать заново только ради того, чтобы включить режим.
+    """
+    rows = []
+    if word:
+        rows.append([btn(PAD + ICON_CHECK + " Использовать " + word + PAD,
+                         pack("go", "filters", "anagram", word, origin),
+                         "success")])
+    rows.append([btn(PAD + ICON_BACK + " Вернуться к фильтрам" + PAD,
+                     pack("go", "filters", pattern, word, origin))])
+    return rows
 
 
 def kb_results(length, pattern, word):
