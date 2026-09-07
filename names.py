@@ -96,9 +96,10 @@ def anagrams(word, count=20):
     return sorted(seen, key=lambda n: (_readability(n), n))[:count]
 
 
-# Telegram не отдаёт бесплатно ники из малого числа разных букв
-# (палиндромы, повторы) - при попытке занять пишет "username is invalid".
-MIN_DISTINCT = 4
+# Ники из совсем малого числа разных букв Telegram обычно не отдаёт.
+# Порог опустили до трёх: gagmg с тремя разными буквами занялся нормально,
+# так что отсекаем только совсем вырожденные вроде ltttl.
+MIN_DISTINCT = 3
 
 
 def enough_variety(name):

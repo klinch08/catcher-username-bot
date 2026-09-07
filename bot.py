@@ -489,8 +489,7 @@ def set_anagram_word(chat_id, user_id, raw, prev, origin="main"):
                    "первый символ - буква." % word)
     elif not names.enough_variety(word):
         problem = ("В «%s» слишком мало разных букв - перестановки выйдут "
-                   "почти одинаковые, и Telegram такие не отдаёт. "
-                   "Нужно минимум 4 разные буквы." % word)
+                   "почти одинаковые. Нужно хотя бы 3 разные буквы." % word)
     elif len(names.anagrams(word, 5)) < 3:
         problem = "Из «%s» толком не переставить буквы." % word
 
