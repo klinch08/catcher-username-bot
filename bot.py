@@ -320,8 +320,9 @@ def kb_filters(pattern, word):
 
 
 def kb_back(pattern, word):
-    return [[btn(PAD + ICON_BACK + " В меню" + PAD,
-                 pack("go", "main", pattern, word))]]
+    """Возврат с экрана анаграмм - обратно в фильтры, откуда сюда и пришли."""
+    return [[btn(PAD + ICON_BACK + " Вернуться к фильтрам" + PAD,
+                 pack("go", "filters", pattern, word))]]
 
 
 def kb_results(length, pattern, word):
