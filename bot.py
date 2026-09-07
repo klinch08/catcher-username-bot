@@ -351,7 +351,7 @@ TEXT_SEARCH = ("Выбери длину ника.\n\n"
 
 TEXT_FILTERS = "Какими будут ники:"
 
-TEXT_ANAGRAM = ("Пришли слово - соберу из его букв перестановки "
+TEXT_ANAGRAM = ("Пришли слово из 5 или 6 букв - соберу из них перестановки "
                 "и проверю, какие свободны.\n\n"
                 "ivanov -> navovi, onaviv, ovavin")
 
@@ -471,9 +471,12 @@ def set_anagram_word(chat_id, user_id, raw, prev, origin="main"):
     word = raw.strip().lstrip("@").lower()
 
     problem = None
-    if not names.is_valid(word):
-        problem = ("«%s» не годится: нужно 5-32 символа, только a-z, 0-9 "
-                   "и подчёркивание, первый символ - буква." % word)
+    if not 5 <= len(word) <= 6:
+        # длиннее шести букв перестановки уже никому не нужны как ники
+        problem = "В «%s» %d символов, а нужно 5 или 6." % (word, len(word))
+    elif not names.is_valid(word):
+        problem = ("«%s» не годится: только a-z, 0-9 и подчёркивание, "
+                   "первый символ - буква." % word)
     elif not names.enough_variety(word):
         problem = ("В «%s» слишком мало разных букв - перестановки выйдут "
                    "почти одинаковые, и Telegram такие не отдаёт. "
