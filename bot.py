@@ -295,9 +295,15 @@ def kb_menu(pattern, word):
 
 
 def kb_search(pattern, word):
-    return [
-        [btn("5 символов", pack("run", 5, pattern, word)),
-         btn("6 символов", pack("run", 6, pattern, word))],
+    # в режиме анаграмм длину задаёт само слово, выбирать тут нечего
+    if pattern == "anagram" and word:
+        lengths = [[btn("%d символов" % len(word),
+                        pack("run", len(word), pattern, word))]]
+    else:
+        lengths = [[btn("5 символов", pack("run", 5, pattern, word)),
+                    btn("6 символов", pack("run", 6, pattern, word))]]
+
+    return lengths + [
         [btn(PAD + ICON_GEAR + " Фильтры" + PAD,
              pack("go", "filters", pattern, word, "search"))],
         [btn(PAD + ICON_BACK + " В меню" + PAD,
