@@ -333,10 +333,11 @@ def kb_back(pattern, word, origin="main"):
     набирать заново только ради того, чтобы включить режим.
     """
     rows = []
-    if word:
-        rows.append([btn(PAD + ICON_CHECK + " Использовать " + word + PAD,
-                         pack("go", "filters", "anagram", word, origin),
-                         "success")])
+    # предлагаем взять старое слово, только если режим ещё не включён:
+    # когда он уже активен, кнопка ничего не меняет
+    if word and pattern != "anagram":
+        rows.append([btn(PAD + "Использовать " + word + PAD,
+                         pack("go", "filters", "anagram", word, origin))])
     rows.append([btn(PAD + ICON_BACK + " Вернуться к фильтрам" + PAD,
                      pack("go", "filters", pattern, word, origin))])
     return rows
