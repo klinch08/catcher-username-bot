@@ -50,7 +50,8 @@ def generate(length=5, pattern="pron", count=20):
             break
         name = fn(length)
         # для mirror/rep разнообразие недостижимо по построению - там не режем
-        if is_valid(name) and enough_variety(name) and not looks_like_word(name):
+        if (is_valid(name) and enough_variety(name)
+                and not looks_like_word(name) and not is_mirror(name)):
             seen.add(name)
     return sorted(seen)
 
@@ -199,3 +200,12 @@ def looks_like_word(name):
         if (name[i] in VOWELS) == (name[i + 1] in VOWELS):
             return False   # нашёлся стык - значит не словоподобный
     return True
+
+
+def is_mirror(name):
+    """Ник читается одинаково с обеих сторон - такие Telegram придерживает.
+
+    Проверено: ovyvo, xmtmx, ltttl зеркальные и не отдаются, а gagmg
+    с теми же тремя разными буквами, но без зеркальности, занялся.
+    """
+    return name == name[::-1]
