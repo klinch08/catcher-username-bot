@@ -7,6 +7,7 @@ for purchase" - потому что ник выставлен на аукцио�
 """
 
 import re
+import time
 import urllib.request
 
 import config
@@ -22,15 +23,29 @@ ERROR = "error"
 _limiter = ratelimit.Limiter(config.FRAGMENT_RATE)
 
 
-def status(name):
-    """LISTED / ABSENT / ERROR."""
+def _fetch(name):
     _limiter.acquire()
     req = urllib.request.Request("https://fragment.com/username/" + name,
                                  headers={"User-Agent": UA})
-    try:
-        html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
-    except Exception:
-        return ERROR
+    return urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
+
+
+def status(name):
+    """LISTED / ABSENT / ERROR.
+
+    Одна повторная попытка: Fragment под нагрузкой иногда обрывает
+    соединение, а молча считать такой ник свободным нельзя - именно так
+    в выдачу попал npool, выставленный на аукцион.
+    """
+    html = None
+    for attempt in (1, 2):
+        try:
+            html = _fetch(name)
+            break
+        except Exception:
+            if attempt == 2:
+                return ERROR
+            time.sleep(0.7)
 
     html = re.sub(r"(?s)<(script|style).*?</\1>", " ", html)
     text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()

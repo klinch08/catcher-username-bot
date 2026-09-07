@@ -89,8 +89,13 @@ def check(name):
 
     # Пустая страница t.me ещё не значит "свободен": ник может стоять
     # на аукционе Fragment, и тогда Telegram его бесплатно не отдаст.
-    if fragment.status(name) == fragment.LISTED:
+    listed = fragment.status(name)
+    if listed == fragment.LISTED:
         return TAKEN, AUCTION
+    if listed == fragment.ERROR:
+        # не дозвонились до Fragment - выдавать ник как свободный опасно,
+        # он может оказаться аукционным
+        return ERROR, None
 
     return FREE, None
 
