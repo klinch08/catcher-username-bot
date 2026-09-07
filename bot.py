@@ -265,23 +265,24 @@ def btn(text, data, style=None):
     return button
 
 
-def pack(action, arg, pattern, word):
+def pack(action, arg, pattern, word, origin="main"):
     """Настройки едут прямо в кнопке.
 
     Так бот не зависит от диска: Render стирает файлы при каждом
     перезапуске, а кнопки живут в сообщении и переживают что угодно.
+    origin помнит, откуда пришли в фильтры, чтобы вернуть туда же.
     Лимит callback_data - 64 байта, наши поля в него укладываются.
     """
-    return ":".join((action, str(arg), pattern, word))
+    return ":".join((action, str(arg), pattern, word, origin))
 
 
 def unpack(data):
     """Разобрать callback_data обратно."""
-    parts = (data.split(":") + ["", "", ""])[:4]
-    action, arg, pattern, word = parts
+    parts = (data.split(":") + ["", "", "", ""])[:5]
+    action, arg, pattern, word, origin = parts
     if pattern not in PATTERN_TITLES:
         pattern = DEFAULT_PATTERN
-    return action, arg, pattern, word
+    return action, arg, pattern, word, (origin or "main")
 
 
 def kb_menu(pattern, word):
@@ -289,7 +290,7 @@ def kb_menu(pattern, word):
         [btn(PAD + ICON_SEARCH + " Поиск" + PAD,
              pack("go", "search", pattern, word), "success")],
         [btn(PAD + ICON_GEAR + " Фильтры" + PAD,
-             pack("go", "filters", pattern, word))],
+             pack("go", "filters", pattern, word, "main"))],
     ]
 
 
@@ -298,31 +299,37 @@ def kb_search(pattern, word):
         [btn("5 символов", pack("run", 5, pattern, word)),
          btn("6 символов", pack("run", 6, pattern, word))],
         [btn(PAD + ICON_GEAR + " Фильтры" + PAD,
-             pack("go", "filters", pattern, word))],
+             pack("go", "filters", pattern, word, "search"))],
         [btn(PAD + ICON_BACK + " В меню" + PAD,
              pack("go", "main", pattern, word))],
     ]
 
 
-def kb_filters(pattern, word):
+def kb_filters(pattern, word, origin="main"):
     rows = []
     for key, title in PATTERN_TITLES.items():
         if key == "anagram" and word:
             title += " (%s)" % word
         icon = ICON_CHECK if pattern == key else PATTERN_ICONS.get(key)
         rows.append([btn(("%s %s" % (icon, title)) if icon else title,
-                         pack("set", key, pattern, word))])
+                         pack("set", key, pattern, word, origin))])
     rows.append([btn(ICON_REFRESH + " Сбросить настройки",
-                     pack("reset", "", pattern, word))])
-    rows.append([btn(PAD + ICON_BACK + " В меню" + PAD,
-                     pack("go", "main", pattern, word))])
+                     pack("reset", "", pattern, word, origin))])
+
+    # возвращаем туда, откуда пришли: из поиска - в поиск, иначе в меню
+    if origin == "search":
+        rows.append([btn(PAD + ICON_BACK + " Вернуться в поиск" + PAD,
+                         pack("go", "search", pattern, word))])
+    else:
+        rows.append([btn(PAD + ICON_BACK + " В меню" + PAD,
+                         pack("go", "main", pattern, word))])
     return rows
 
 
-def kb_back(pattern, word):
+def kb_back(pattern, word, origin="main"):
     """Возврат с экрана анаграмм - обратно в фильтры, откуда сюда и пришли."""
     return [[btn(PAD + ICON_BACK + " Вернуться к фильтрам" + PAD,
-                 pack("go", "filters", pattern, word))]]
+                 pack("go", "filters", pattern, word, origin))]]
 
 
 def kb_results(length, pattern, word):
@@ -455,8 +462,12 @@ def do_search(chat_id, length, pattern, word, message_id=None):
          message_id)
 
 
-def set_anagram_word(chat_id, user_id, raw, message_id=None):
-    """Принять слово для режима анаграмм, отсеяв заведомо бесполезные."""
+def set_anagram_word(chat_id, user_id, raw, prev, origin="main"):
+    """Принять слово для режима анаграмм, отсеяв заведомо бесполезные.
+
+    Пока слово не принято, фильтр остаётся прежним (prev) - иначе выйдет
+    режим анаграмм без слова, по которому нечего перебирать.
+    """
     word = raw.strip().lstrip("@").lower()
 
     problem = None
@@ -471,16 +482,16 @@ def set_anagram_word(chat_id, user_id, raw, message_id=None):
         problem = "Из «%s» толком не переставить буквы." % word
 
     if problem:
-        pending[user_id] = "anagram_word"
+        pending[user_id] = (prev, origin)
         show(chat_id, "anagram", problem + "\n\nПришли другое слово.",
-             kb_back("anagram", ""))
+             kb_back(prev, "", origin))
         return
 
     example = ", ".join(names.anagrams(word, 3))
     show(chat_id, "filters",
          "Готово, слово «%s». Например: %s\n\n"
          "Теперь жми Поиск - переберу перестановки и покажу свободные."
-         % (word, example), kb_filters("anagram", word))
+         % (word, example), kb_filters("anagram", word, origin))
 
 
 # --------------------------------------------------------------------- обработчики
@@ -501,8 +512,9 @@ def handle_message(msg):
     drop_message(chat_id, msg["message_id"])
 
     want = pending.pop(user_id, None)
-    if want == "anagram_word" and not text.startswith("/"):
-        set_anagram_word(chat_id, user_id, text)
+    if want and not text.startswith("/"):
+        prev, origin = want
+        set_anagram_word(chat_id, user_id, text, prev, origin)
         return
 
     show(chat_id, "menu", TEXT_MENU, kb_menu(DEFAULT_PATTERN, ""))
@@ -515,7 +527,7 @@ def handle_callback(query):
     if not allowed(user_id):
         return
 
-    action, arg, pattern, word = unpack(query.get("data", ""))
+    action, arg, pattern, word, origin = unpack(query.get("data", ""))
 
     # нажали на уже выбранный фильтр - незачем перерисовывать экран
     if action == "set" and arg == pattern and arg != "anagram":
@@ -534,22 +546,26 @@ def handle_callback(query):
         elif arg == "search":
             show(chat_id, "search", TEXT_SEARCH, kb_search(pattern, word), message_id)
         elif arg == "filters":
-            show(chat_id, "filters", TEXT_FILTERS, kb_filters(pattern, word),
-                 message_id)
+            show(chat_id, "filters", TEXT_FILTERS,
+                 kb_filters(pattern, word, origin), message_id)
 
     elif action == "run":
         run_bg(do_search, chat_id, int(arg), pattern, word, message_id)
 
     elif action == "reset":
         show(chat_id, "filters", "Настройки сброшены.\n\n" + TEXT_FILTERS,
-             kb_filters(DEFAULT_PATTERN, ""), message_id)
+             kb_filters(DEFAULT_PATTERN, "", origin), message_id)
 
     elif action == "set":
         if arg == "anagram":
-            pending[user_id] = "anagram_word"
-            show(chat_id, "anagram", TEXT_ANAGRAM, kb_back(arg, word), message_id)
+            # фильтр пока не меняем: анаграммы включатся, только когда
+            # пользователь пришлёт слово
+            pending[user_id] = (pattern, origin)
+            show(chat_id, "anagram", TEXT_ANAGRAM,
+                 kb_back(pattern, word, origin), message_id)
         else:
-            show(chat_id, "filters", TEXT_FILTERS, kb_filters(arg, word), message_id)
+            show(chat_id, "filters", TEXT_FILTERS,
+                 kb_filters(arg, word, origin), message_id)
 
 
 # --------------------------------------------------------------------------- запуск
