@@ -97,10 +97,10 @@ def anagrams(word, count=20):
     return sorted(seen, key=lambda n: (_readability(n), n))[:count]
 
 
-# Ники из совсем малого числа разных букв Telegram обычно не отдаёт.
-# Порог опустили до трёх: gagmg с тремя разными буквами занялся нормально,
-# так что отсекаем только совсем вырожденные вроде ltttl.
-MIN_DISTINCT = 3
+# Совсем вырожденные ники Telegram придерживает, но порог тут низкий:
+# gagmg с тремя разными буквами занялся, swwww с двумя - тоже. Симметричные
+# отсекаются отдельно, через is_mirror.
+MIN_DISTINCT = 2
 
 
 def enough_variety(name):
@@ -209,3 +209,19 @@ def is_mirror(name):
     с теми же тремя разными буквами, но без зеркальности, занялся.
     """
     return name == name[::-1]
+
+
+def _repeats(length):
+    """Одна буква повторяется трижды, места любые: swwww, oszzz, ababa."""
+    letters = string.ascii_lowercase
+    hero = random.choice(letters)
+    # сколько раз повторить: три чаще всего, но бывает и больше
+    times = random.choice((3, 3, 3, 4, min(5, length)))
+    spots = random.sample(range(length), min(times, length))
+
+    rest = [c for c in letters if c != hero]
+    out = [hero if i in spots else random.choice(rest) for i in range(length)]
+    return "".join(out)
+
+
+PATTERNS["repeat"] = _repeats
