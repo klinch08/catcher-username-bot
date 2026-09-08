@@ -212,12 +212,10 @@ def is_mirror(name):
 
 
 def _repeats(length):
-    """Одна буква повторяется трижды, места любые: swwww, oszzz, ababa."""
+    """Одна буква ровно трижды, места любые: swwsz, oszoz, ababc."""
     letters = string.ascii_lowercase
     hero = random.choice(letters)
-    # сколько раз повторить: три чаще всего, но бывает и больше
-    times = random.choice((3, 3, 3, 4, min(5, length)))
-    spots = random.sample(range(length), min(times, length))
+    spots = random.sample(range(length), 3)
 
     rest = [c for c in letters if c != hero]
     out = [hero if i in spots else random.choice(rest) for i in range(length)]
@@ -225,3 +223,22 @@ def _repeats(length):
 
 
 PATTERNS["repeat"] = _repeats
+
+
+def _pair(length):
+    """Две буквы по два раза через одну, дальше другие: ododh, hshsz.
+
+    Чередование держим только на первых четырёх символах - иначе на шести
+    буквах первая встречалась бы трижды и форма расползалась бы.
+    """
+    first = random.choice(string.ascii_lowercase)
+    second = random.choice([c for c in string.ascii_lowercase if c != first])
+    rest = [c for c in string.ascii_lowercase if c not in (first, second)]
+
+    out = [first, second, first, second][:length]
+    while len(out) < length:
+        out.append(random.choice(rest))
+    return "".join(out)
+
+
+PATTERNS["pair"] = _pair
