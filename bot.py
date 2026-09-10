@@ -42,6 +42,10 @@ pending = {}
 _log_lock = threading.Lock()
 _photo_ids = {}
 
+# Выбранный фильтр: user_id -> (шаблон, слово для анаграмм). Лежит на диске,
+# чтобы перезапуск бота не сбрасывал настройки в умолчание.
+_filters = {}
+
 # Единственное сообщение бота в каждом чате: chat_id -> message_id.
 # Всё происходит внутри него, новые сообщения не плодим.
 _last_msg = {}
@@ -101,6 +105,32 @@ def load_photo_cache():
                 _photo_ids = json.load(f)
         except Exception:
             _photo_ids = {}
+
+
+def load_filters():
+    global _filters
+    if os.path.exists(config.FILTER_STORE):
+        try:
+            with io.open(config.FILTER_STORE, encoding="utf-8") as f:
+                _filters = json.load(f)
+        except Exception:
+            _filters = {}
+
+
+def remember_filter(user_id, pattern, word):
+    _filters[str(user_id)] = [pattern, word]
+    try:
+        with io.open(config.FILTER_STORE, "w", encoding="utf-8") as f:
+            f.write(json.dumps(_filters, ensure_ascii=False))
+    except Exception as e:
+        log("не смог сохранить фильтр:", e)
+
+
+def recall_filter(user_id):
+    saved = _filters.get(str(user_id)) or []
+    pattern = saved[0] if saved and saved[0] in PATTERN_TITLES else DEFAULT_PATTERN
+    word = saved[1] if len(saved) > 1 else ""
+    return pattern, word
 
 
 def save_photo_cache():
@@ -508,6 +538,7 @@ def set_anagram_word(chat_id, user_id, raw, prev, origin="main"):
              kb_back(prev, "", origin))
         return
 
+    remember_filter(user_id, "anagram", word)
     example = ", ".join(names.anagrams(word, 3))
     show(chat_id, "filters",
          "Готово, слово «%s». Например: %s\n\n"
@@ -538,7 +569,8 @@ def handle_message(msg):
         set_anagram_word(chat_id, user_id, text, prev, origin)
         return
 
-    show(chat_id, "menu", TEXT_MENU, kb_menu(DEFAULT_PATTERN, ""))
+    pattern, word = recall_filter(user_id)
+    show(chat_id, "menu", TEXT_MENU, kb_menu(pattern, word))
 
 
 def handle_callback(query):
@@ -574,6 +606,7 @@ def handle_callback(query):
         run_bg(do_search, chat_id, int(arg), pattern, word, message_id)
 
     elif action == "reset":
+        remember_filter(user_id, DEFAULT_PATTERN, "")
         show(chat_id, "filters", "Настройки сброшены.\n\n" + TEXT_FILTERS,
              kb_filters(DEFAULT_PATTERN, "", origin), message_id)
 
@@ -585,6 +618,7 @@ def handle_callback(query):
             show(chat_id, "anagram", TEXT_ANAGRAM,
                  kb_back(pattern, word, origin), message_id)
         else:
+            remember_filter(user_id, arg, word)
             show(chat_id, "filters", TEXT_FILTERS,
                  kb_filters(arg, word, origin), message_id)
 
@@ -596,6 +630,7 @@ def main():
         log("Нет токена: положи его в token.txt или в переменную BOT_TOKEN")
         return
     load_photo_cache()
+    load_filters()
     # на хостингах-веб-сервисах нужна заглушка, которую будет дёргать пингер
     if os.environ.get("PORT"):
         log("Заглушка для пингера на порту %d" % keepalive.start())
