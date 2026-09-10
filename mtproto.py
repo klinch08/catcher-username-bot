@@ -20,6 +20,10 @@ import time
 import urllib.error
 import urllib.request
 
+SESSION = os.environ.get("TG_SESSION", "").strip()
+API_ID = 33152316
+API_HASH = "0f4ceed1ef9092455948e984fedca172"
+
 ENDPOINT = os.environ.get(
     "CONFIRM_URL",
     "https://ubtbjowghezwhevpawwd.supabase.co/functions/v1/username-bot")
@@ -40,7 +44,37 @@ _silent_until = 0.0
 
 def available():
     """Готовы ли мы спрашивать про резерв прямо сейчас."""
-    return bool(ENDPOINT) and time.time() >= _silent_until
+    return (bool(SESSION) or bool(ENDPOINT)) and time.time() >= _silent_until
+
+
+_client = None
+
+
+def _via_telethon(name):
+    """Спросить самим - нужна строка сессии в TG_SESSION."""
+    global _client, _silent_until
+    try:
+        if _client is None:
+            from telethon.sync import TelegramClient
+            from telethon.sessions import StringSession
+            _client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
+            _client.connect()
+        from telethon.tl.functions.contacts import ResolveUsernameRequest
+        _client(ResolveUsernameRequest(name))
+        return TAKEN
+    except Exception as e:
+        text = "%s: %s" % (type(e).__name__, e)
+        if "UsernameNotOccupied" in text:
+            return FREE
+        if "UsernameInvalid" in text:
+            return RESERVED
+        if "UsernamePurchaseAvailable" in text:
+            return TAKEN
+        if "FloodWait" in text:
+            # Telegram просит подождать: молчим, иначе метод уведут в
+            # отказ на часы и проверка ляжет совсем
+            _silent_until = time.time() + COOLDOWN
+        return None
 
 
 def confirm(name):
@@ -55,6 +89,9 @@ def confirm(name):
         if wait > 0:
             time.sleep(wait)
         _last_call = time.time()
+
+    if SESSION:
+        return _via_telethon(name)
 
     body = json.dumps({"confirm": name}).encode("utf-8")
     req = urllib.request.Request(
