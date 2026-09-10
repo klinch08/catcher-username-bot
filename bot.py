@@ -634,6 +634,13 @@ def handle_callback(query):
 def main():
     if not config.BOT_TOKEN:
         log("Нет токена: положи его в token.txt или в переменную BOT_TOKEN")
+        # Не выходим: на хостинге ранний выход считается упавшим деплоем,
+        # и тогда остаётся жить предыдущий процесс. А он опрашивает того же
+        # бота, и два поллера начинают отбирать апдейты друг у друга.
+        if os.environ.get("PORT"):
+            keepalive.start()
+            while True:
+                time.sleep(3600)
         return
     load_photo_cache()
     load_filters()
