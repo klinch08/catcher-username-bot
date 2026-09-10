@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import config
 import fragment
+import mtproto
 import ratelimit
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -96,6 +97,14 @@ def check(name):
         # не дозвонились до Fragment - выдавать ник как свободный опасно,
         # он может оказаться аукционным
         return ERROR, None
+
+    # t.me и Fragment молчат про внутренний резерв Telegram - спрашиваем
+    # его самого. Сюда доходят единицы, так что лимиты не трогаем.
+    sure = mtproto.confirm(name)
+    if sure == mtproto.RESERVED:
+        return RESERVED, None
+    if sure == mtproto.TAKEN:
+        return TAKEN, USER
 
     return FREE, None
 

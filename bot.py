@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 
 import checker
+import mtproto
 import config
 import keepalive
 import names
@@ -507,6 +508,11 @@ def do_search(chat_id, length, pattern, word, message_id=None):
     free.sort(key=names.readability, reverse=True)
     text = format_results(free[:config.MAX_FOUND], checked,
                           time.time() - started, errors)
+    if not mtproto.available():
+        # без подтверждения через Telegram часть ников окажется invalid,
+        # и лучше сказать об этом прямо, чем выдать их молча
+        text += ("\n\nПодтверждение через Telegram сейчас недоступно - "
+                 "часть ников может оказаться invalid.")
     show(chat_id, "results", text, kb_results(length, pattern, word),
          message_id)
 
