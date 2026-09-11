@@ -396,8 +396,10 @@ def kb_results(length, pattern, word):
 TEXT_MENU = "Подбор свободных ников\n\nВыбери раздел ниже:"
 
 TEXT_SEARCH = ("Выбери длину ника.\n\n"
-               "Поиск идёт %d секунд и останавливается раньше, как только "
-               "наберётся %d свободных." % (config.DURATION, config.MAX_FOUND))
+               "Поиск идёт, пока не наберёт %d свободных (у фильтров с "
+               "повторами - %d). Каждый ник подтверждается через сам Telegram, "
+               "поэтому invalid в выдачу не попадают."
+               % (config.DEFAULT_TARGET, min(config.TARGETS.values())))
 
 TEXT_FILTERS = "Какими будут ники:"
 
@@ -411,15 +413,21 @@ TEXT_ANAGRAM = ("Пришли слово из 5 или 6 букв - соберу
 DOT_FRAMES = ("...", "..", ".", "..")
 
 
-def animate_dots(chat_id, message_id, stop, base="Идёт поиск юзернеймов"):
+def animate_dots(chat_id, message_id, stop, progress=None,
+                 base="Идёт поиск юзернеймов"):
     """Циклично гоняем точки в подписи, пока поиск не закончится.
+
+    progress - функция, которая отдаёт строку со счётчиком найденного.
 
     Проверяем флаг и перед правкой тоже: поиск может закончиться, пока мы
     спим, и тогда лишняя правка затрёт готовый результат вместе с кнопками.
     """
     i = 0
     while not stop.is_set():
-        edit_caption(chat_id, message_id, base + DOT_FRAMES[i % len(DOT_FRAMES)])
+        text = base + DOT_FRAMES[i % len(DOT_FRAMES)]
+        if progress:
+            text += "\n\n" + progress()
+        edit_caption(chat_id, message_id, text)
         i += 1
         stop.wait(0.6)
         if stop.is_set():
@@ -447,12 +455,12 @@ def format_results(free, checked, spent, errors):
         text = ("Свободных нет, проверено %d за %d сек.\n"
                 "Попробуй другой фильтр или длину побольше." % (checked, spent))
     if errors:
-        text += "\n\nНе удалось проверить: %d - сеть." % errors
+        text += "\n\nНе удалось проверить: %d - в выдачу не попали." % errors
     return text
 
 
 def do_search(chat_id, length, pattern, word, message_id=None):
-    """Крутить пачки, пока не выйдет время или не наберётся MAX_FOUND ников."""
+    """Крутить пачки, пока не наберётся норма фильтра: 5 или 10 ников."""
     anagram_of = word if pattern == "anagram" else None
 
     if pattern == "anagram" and not anagram_of:
@@ -464,20 +472,27 @@ def do_search(chat_id, length, pattern, word, message_id=None):
         length = len(anagram_of)
     head = "Идёт поиск юзернеймов..."
 
-    # во время поиска - своя картинка и бегущие точки, результат покажем потом
-    message_id = show(chat_id, "searching", head, None, message_id)
-    stop = threading.Event()
-    ticker = threading.Thread(target=animate_dots,
-                              args=(chat_id, message_id, stop), daemon=True)
-    ticker.start()
-
     started = time.time()
     seen, free = set(), []
     checked = errors = 0
+    target = config.TARGETS.get(pattern, config.DEFAULT_TARGET)
+
+    def progress():
+        return "Найдено %d из %d, проверено %d" % (len(free), target, checked)
+
+    # во время поиска - своя картинка, бегущие точки и счётчик, результат
+    # покажем потом. Счётчики заводим раньше: первая правка подписи сразу
+    message_id = show(chat_id, "searching", head, None, message_id)
+    stop = threading.Event()
+    ticker = threading.Thread(target=animate_dots,
+                              args=(chat_id, message_id, stop, progress),
+                              daemon=True)
+    ticker.start()
 
     try:
-        while (time.time() - started < config.DURATION
-               and len(free) < config.MAX_FOUND):
+        while len(free) < target and time.time() - started < config.HARD_CAP:
+            if not free and checked >= config.GIVE_UP_AFTER:
+                break
             pool = (names.anagrams(anagram_of, config.BATCH) if anagram_of
                     else names.generate(length, pattern, config.BATCH))
             batch = [n for n in pool if n not in seen]
@@ -506,13 +521,12 @@ def do_search(chat_id, length, pattern, word, message_id=None):
         ticker.join(timeout=3)
 
     free.sort(key=names.readability, reverse=True)
-    text = format_results(free[:config.MAX_FOUND], checked,
+    text = format_results(free[:target], checked,
                           time.time() - started, errors)
     if not mtproto.available():
-        # без подтверждения через Telegram часть ников окажется invalid,
-        # и лучше сказать об этом прямо, чем выдать их молча
-        text += ("\n\nПодтверждение через Telegram сейчас недоступно - "
-                 "часть ников может оказаться invalid.")
+        # неподтверждённые ники в выдачу не идут, так что найдено меньше
+        text += ("\n\nTelegram притормозил проверку. Непроверенные ники "
+                 "не показываю - через пару минут попробуй ещё раз.")
     show(chat_id, "results", text, kb_results(length, pattern, word),
          message_id)
 
