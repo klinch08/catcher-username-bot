@@ -3,22 +3,23 @@
 
 t.me и Fragment молчат про внутренний резерв: страница пустая, на Fragment
 ника нет, а при попытке занять выскакивает "username is invalid". Видит это
-только MTProto - тот же протокол, по которому ходит обычный клиент.
+только MTProto, и только account.CheckUsername - тот же вызов, что делает
+приложение, когда вводишь ник в настройках. contacts.ResolveUsername для
+этого не годится: jemag и ovyvo он называет свободными, хотя занять их не дают.
 
-Спрашивать напрямую отсюда мы не можем: для MTProto нужна строка сессии,
-то есть полный доступ к аккаунту. Она уже лежит в Supabase, у соседнего
-бота, поэтому спрашиваем его - ключ никуда не переезжает.
+Все обращения к Telegram идут через один выделенный поток. Клиент Telethon
+привязан к циклу событий того потока, где создан, и из чужого потока вызов
+падает. Раньше клиента дёргали из пула проверки, ошибка глоталась, и
+зарезервированные ники уходили в выдачу как свободные.
 
-Дёргаем редко и только тех, кто уже прошёл t.me и Fragment: у метода
-жёсткие лимиты, после пары десятков запросов Telegram просит подождать.
+Если TG_SESSION не задан, спрашиваем соседнего бота, у которого сессия есть.
 """
 
 import json
 import os
-import threading
 import time
-import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 SESSION = os.environ.get("TG_SESSION", "").strip()
 API_ID = 33152316
@@ -29,7 +30,6 @@ ENDPOINT = os.environ.get(
     "https://ubtbjowghezwhevpawwd.supabase.co/functions/v1/username-bot")
 TOKEN = os.environ.get("CONFIRM_SECRET", "a0d3240a7228850d359116050e382b0e")
 
-# Пауза между запросами и то, насколько долго молчим после отказа.
 # CheckUsername строже всех по лимитам: частые запросы Telegram однажды
 # наказал отказом на 23 часа, поэтому не чаще раза в секунду.
 GAP = 1.0
@@ -39,22 +39,38 @@ FREE = "free"
 TAKEN = "taken"
 RESERVED = "reserved"
 
-_lock = threading.Lock()
+# один поток на всё общение с Telegram - и клиент живёт в нём же
+_telegram = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mtproto")
+_client = None
 _last_call = 0.0
 _silent_until = 0.0
 
 
+def _log(*parts):
+    print(time.strftime("%H:%M:%S ") + "mtproto: " + " ".join(str(p) for p in parts),
+          flush=True)
+
+
 def available():
-    """Готовы ли мы спрашивать про резерв прямо сейчас."""
+    """Можно ли прямо сейчас подтвердить ник через Telegram."""
     return (bool(SESSION) or bool(ENDPOINT)) and time.time() >= _silent_until
 
 
-_client = None
+def _back_off(seconds, reason):
+    global _silent_until
+    _silent_until = time.time() + seconds
+    _log("пауза %d с: %s" % (seconds, reason))
 
 
-def _via_telethon(name):
-    """Спросить самим - нужна строка сессии в TG_SESSION."""
-    global _client, _silent_until
+def _ask_telegram(name):
+    """Выполняется только в потоке _telegram."""
+    global _client, _last_call
+
+    wait = GAP - (time.time() - _last_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call = time.time()
+
     try:
         if _client is None:
             from telethon.sync import TelegramClient
@@ -64,34 +80,24 @@ def _via_telethon(name):
         from telethon.tl.functions.account import CheckUsernameRequest
         return FREE if _client(CheckUsernameRequest(name)) else TAKEN
     except Exception as e:
-        text = type(e).__name__
-        if "UsernameInvalid" in text:
+        kind = type(e).__name__
+        if "UsernameInvalid" in kind:
             return RESERVED
-        if "UsernamePurchaseAvailable" in text or "UsernameOccupied" in text:
+        if "UsernamePurchaseAvailable" in kind or "UsernameOccupied" in kind:
             return TAKEN
-        if "FloodWait" in text:
+        if "FloodWait" in kind:
             # переждём ровно столько, сколько просит Telegram: полезем
             # раньше - и он уведёт метод в отказ на часы
-            _silent_until = time.time() + max(COOLDOWN, getattr(e, "seconds", 0))
+            _back_off(max(COOLDOWN, getattr(e, "seconds", 0)), kind)
+        else:
+            # неизвестная ошибка: молча пропустить ник как свободный нельзя,
+            # поэтому говорим о ней и честно предупреждаем в выдаче
+            _log("не смог проверить %s: %s %s" % (name, kind, e))
+            _back_off(60, kind)
         return None
 
 
-def confirm(name):
-    """Вернуть FREE / TAKEN / RESERVED, либо None, если спросить не вышло."""
-    global _last_call, _silent_until
-
-    if not available():
-        return None
-
-    with _lock:
-        wait = GAP - (time.time() - _last_call)
-        if wait > 0:
-            time.sleep(wait)
-        _last_call = time.time()
-
-    if SESSION:
-        return _via_telethon(name)
-
+def _ask_neighbour(name):
     body = json.dumps({"confirm": name}).encode("utf-8")
     req = urllib.request.Request(
         ENDPOINT, data=body,
@@ -100,11 +106,17 @@ def confirm(name):
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             status = json.loads(r.read().decode()).get("status")
-    except Exception:
-        # не дозвонились - переждём, чтобы не долбить впустую весь поиск
-        _silent_until = time.time() + COOLDOWN
+    except Exception as e:
+        _back_off(COOLDOWN, "сосед не ответил: %s" % type(e).__name__)
         return None
+    return status if status in (FREE, TAKEN, RESERVED) else None
 
-    if status in (FREE, TAKEN, RESERVED):
-        return status
-    return None
+
+def confirm(name):
+    """Вернуть FREE / TAKEN / RESERVED, либо None, если спросить не вышло."""
+    if not available():
+        return None
+    if SESSION:
+        # ждём ответа из потока Telegram; очередь там же и выстраивается
+        return _telegram.submit(_ask_telegram, name).result()
+    return _ask_neighbour(name)
