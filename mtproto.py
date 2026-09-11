@@ -30,7 +30,9 @@ ENDPOINT = os.environ.get(
 TOKEN = os.environ.get("CONFIRM_SECRET", "a0d3240a7228850d359116050e382b0e")
 
 # Пауза между запросами и то, насколько долго молчим после отказа.
-GAP = 0.5
+# CheckUsername строже всех по лимитам: частые запросы Telegram однажды
+# наказал отказом на 23 часа, поэтому не чаще раза в секунду.
+GAP = 1.0
 COOLDOWN = 5 * 60
 
 FREE = "free"
@@ -59,21 +61,18 @@ def _via_telethon(name):
             from telethon.sessions import StringSession
             _client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
             _client.connect()
-        from telethon.tl.functions.contacts import ResolveUsernameRequest
-        _client(ResolveUsernameRequest(name))
-        return TAKEN
+        from telethon.tl.functions.account import CheckUsernameRequest
+        return FREE if _client(CheckUsernameRequest(name)) else TAKEN
     except Exception as e:
-        text = "%s: %s" % (type(e).__name__, e)
-        if "UsernameNotOccupied" in text:
-            return FREE
+        text = type(e).__name__
         if "UsernameInvalid" in text:
             return RESERVED
-        if "UsernamePurchaseAvailable" in text:
+        if "UsernamePurchaseAvailable" in text or "UsernameOccupied" in text:
             return TAKEN
         if "FloodWait" in text:
-            # Telegram просит подождать: молчим, иначе метод уведут в
-            # отказ на часы и проверка ляжет совсем
-            _silent_until = time.time() + COOLDOWN
+            # переждём ровно столько, сколько просит Telegram: полезем
+            # раньше - и он уведёт метод в отказ на часы
+            _silent_until = time.time() + max(COOLDOWN, getattr(e, "seconds", 0))
         return None
 
 
