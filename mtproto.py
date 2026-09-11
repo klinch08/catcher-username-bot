@@ -15,6 +15,7 @@ t.me и Fragment молчат про внутренний резерв: стра
 Если TG_SESSION не задан, спрашиваем соседнего бота, у которого сессия есть.
 """
 
+import asyncio
 import json
 import os
 import time
@@ -39,8 +40,15 @@ FREE = "free"
 TAKEN = "taken"
 RESERVED = "reserved"
 
+def _own_loop():
+    # Python 3.14 больше не создаёт цикл событий в потоке сам, а Telethon
+    # без него падает с "There is no current event loop" на первом же вызове
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 # один поток на всё общение с Telegram - и клиент живёт в нём же
-_telegram = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mtproto")
+_telegram = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mtproto",
+                               initializer=_own_loop)
 _client = None
 _last_call = 0.0
 _silent_until = 0.0

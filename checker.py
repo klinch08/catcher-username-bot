@@ -105,6 +105,10 @@ def check(name):
         return RESERVED, None
     if sure == mtproto.TAKEN:
         return TAKEN, USER
+    if sure is None and mtproto.SESSION:
+        # Telegram не ответил - ник не подтверждён. Выдать его как свободный
+        # нельзя: половина таких потом оказывается invalid
+        return ERROR, None
 
     return FREE, None
 
