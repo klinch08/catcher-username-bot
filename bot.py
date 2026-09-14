@@ -419,7 +419,7 @@ def kb_back(pattern, word, origin="main"):
 def kb_cancel(pattern, word):
     """Единственная кнопка под сообщением, пока идёт поиск."""
     return [[btn(PAD + ICON_CANCEL + " Отменить поиск" + PAD,
-                 pack("cancel", "", pattern, word), "danger")]]
+                 pack("cancel", "", pattern, word))]]
 
 
 def kb_results(length, pattern, word):
