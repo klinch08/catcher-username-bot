@@ -118,20 +118,41 @@ def load_filters():
             _filters = {}
 
 
-def remember_filter(user_id, pattern, word):
-    _filters[str(user_id)] = [pattern, word]
+def _prefs(user_id):
+    saved = _filters.get(str(user_id)) or {}
+    if isinstance(saved, list):
+        # раньше хранили голый список [шаблон, слово]
+        saved = {"pattern": saved[0] if saved else None,
+                 "word": saved[1] if len(saved) > 1 else ""}
+    return dict(saved)
+
+
+def _save_prefs(user_id, **changes):
+    prefs = _prefs(user_id)
+    prefs.update(changes)
+    _filters[str(user_id)] = prefs
     try:
         with io.open(config.FILTER_STORE, "w", encoding="utf-8") as f:
             f.write(json.dumps(_filters, ensure_ascii=False))
     except Exception as e:
-        log("не смог сохранить фильтр:", e)
+        log("не смог сохранить настройки:", e)
+
+
+def remember_filter(user_id, pattern, word):
+    _save_prefs(user_id, pattern=pattern, word=word)
 
 
 def recall_filter(user_id):
-    saved = _filters.get(str(user_id)) or []
-    pattern = saved[0] if saved and saved[0] in PATTERN_TITLES else DEFAULT_PATTERN
-    word = saved[1] if len(saved) > 1 else ""
-    return pattern, word
+    prefs = _prefs(user_id)
+    pattern = prefs.get("pattern")
+    if pattern not in PATTERN_TITLES:
+        pattern = DEFAULT_PATTERN
+    return pattern, prefs.get("word") or ""
+
+
+def live_enabled(user_id):
+    """Показывать ли найденные ники прямо во время поиска. По умолчанию нет."""
+    return bool(_prefs(user_id).get("live"))
 
 
 def save_photo_cache():
@@ -146,8 +167,10 @@ def photo_path(screen):
     return os.path.join(config.IMAGE_DIR, SCREEN_IMAGES.get(screen, ""))
 
 
-def send_text(chat_id, text, keyboard=None):
+def send_text(chat_id, text, keyboard=None, html=False):
     params = {"chat_id": chat_id, "text": text, "disable_web_page_preview": "true"}
+    if html:
+        params["parse_mode"] = "HTML"
     if keyboard:
         params["reply_markup"] = {"inline_keyboard": keyboard}
     try:
@@ -184,11 +207,12 @@ def drop_message(chat_id, message_id):
         pass   # старше 48 часов или уже удалено - не беда
 
 
-def show(chat_id, screen, text, keyboard=None, message_id=None):
+def show(chat_id, screen, text, keyboard=None, message_id=None, html=False):
     """Показать экран: картинка-шапка плюс текст под ней.
 
     Первый раз картинка заливается файлом, дальше используется file_id.
     Если сообщение уже есть - меняем в нём и картинку, и подпись.
+    html=True - подпись с разметкой: жирный шрифт, цитаты.
     """
     # если экран вызван без привязки - правим то сообщение, что уже висит
     if message_id is None:
@@ -198,6 +222,7 @@ def show(chat_id, screen, text, keyboard=None, message_id=None):
     markup = {"inline_keyboard": keyboard} if keyboard else None
     # у подписи к фото лимит 1024 символа
     caption = text if len(text) <= 1024 else text[:1000] + "\n..."
+    fmt = {"parse_mode": "HTML"} if html else {}
 
     file_id = _photo_ids.get(screen)
 
@@ -207,7 +232,7 @@ def show(chat_id, screen, text, keyboard=None, message_id=None):
             if file_id:
                 params = {"chat_id": chat_id, "message_id": message_id,
                           "media": {"type": "photo", "media": file_id,
-                                    "caption": caption}}
+                                    "caption": caption, **fmt}}
                 if markup:
                     params["reply_markup"] = markup
                 api("editMessageMedia", **params)
@@ -216,7 +241,7 @@ def show(chat_id, screen, text, keyboard=None, message_id=None):
                 # в это же сообщение через attach://
                 params = {"chat_id": chat_id, "message_id": message_id,
                           "media": {"type": "photo", "media": "attach://photo",
-                                    "caption": caption}}
+                                    "caption": caption, **fmt}}
                 if markup:
                     params["reply_markup"] = markup
                 resp = api_upload("editMessageMedia", "photo", path, **params)
@@ -225,7 +250,7 @@ def show(chat_id, screen, text, keyboard=None, message_id=None):
                     _photo_ids[screen] = sizes[-1]["file_id"]
                     save_photo_cache()
             else:
-                edit_caption(chat_id, message_id, text, keyboard)
+                edit_caption(chat_id, message_id, text, keyboard, html)
             _last_msg[chat_id] = message_id
             return message_id
         except Exception as e:
@@ -239,28 +264,30 @@ def show(chat_id, screen, text, keyboard=None, message_id=None):
     try:
         if file_id:
             resp = api("sendPhoto", chat_id=chat_id, photo=file_id,
-                       caption=caption, reply_markup=markup or {})
+                       caption=caption, reply_markup=markup or {}, **fmt)
         elif os.path.exists(path):
             resp = api_upload("sendPhoto", "photo", path, chat_id=chat_id,
-                              caption=caption, reply_markup=markup or {})
+                              caption=caption, reply_markup=markup or {}, **fmt)
             sizes = resp["result"].get("photo") or []
             if sizes:
                 _photo_ids[screen] = sizes[-1]["file_id"]
                 save_photo_cache()
         else:
-            return remember(chat_id, send_text(chat_id, text, keyboard))
+            return remember(chat_id, send_text(chat_id, text, keyboard, html))
         new_id = resp["result"]["message_id"]
         _last_msg[chat_id] = new_id
         return new_id
     except Exception as e:
         log("show failed:", e)
-        return remember(chat_id, send_text(chat_id, text, keyboard))
+        return remember(chat_id, send_text(chat_id, text, keyboard, html))
 
 
-def edit_caption(chat_id, message_id, text, keyboard=None):
+def edit_caption(chat_id, message_id, text, keyboard=None, html=False):
     """Поменять только подпись под картинкой - для прогресса поиска."""
     params = {"chat_id": chat_id, "message_id": message_id,
               "caption": text if len(text) <= 1024 else text[:1000] + "\n..."}
+    if html:
+        params["parse_mode"] = "HTML"
     if keyboard:
         params["reply_markup"] = {"inline_keyboard": keyboard}
     try:
@@ -344,7 +371,7 @@ def kb_search(pattern, word):
     ]
 
 
-def kb_filters(pattern, word, origin="main"):
+def kb_filters(pattern, word, origin="main", live=False):
     rows = []
     for key, title in PATTERN_TITLES.items():
         if key == "anagram" and word:
@@ -352,6 +379,9 @@ def kb_filters(pattern, word, origin="main"):
         icon = ICON_CHECK if pattern == key else PATTERN_ICONS.get(key)
         rows.append([btn(("%s %s" % (icon, title)) if icon else title,
                          pack("set", key, pattern, word, origin))])
+    live_title = "Показывать найденные во время поиска"
+    rows.append([btn((ICON_CHECK + " " + live_title) if live else live_title,
+                     pack("live", "", pattern, word, origin))])
     rows.append([btn(ICON_REFRESH + " Сбросить настройки",
                      pack("reset", "", pattern, word, origin))])
 
@@ -427,7 +457,7 @@ def animate_dots(chat_id, message_id, stop, progress=None,
         text = base + DOT_FRAMES[i % len(DOT_FRAMES)]
         if progress:
             text += "\n\n" + progress()
-        edit_caption(chat_id, message_id, text)
+        edit_caption(chat_id, message_id, text, html=True)
         i += 1
         stop.wait(0.6)
         if stop.is_set():
@@ -449,7 +479,7 @@ def format_results(free, checked, spent, errors):
     if free:
         text = "Свободны: %d (проверено %d за %d сек)\n\n" % (
             len(free), checked, spent)
-        text += "\n".join("@" + n for n in free)
+        text += "\n".join("<b>@%s</b>" % n for n in free)
         text += "\n\nЗанимай в настройках профиля, пока не увели."
     else:
         text = ("Свободных нет, проверено %d за %d сек.\n"
@@ -459,13 +489,13 @@ def format_results(free, checked, spent, errors):
     return text
 
 
-def do_search(chat_id, length, pattern, word, message_id=None):
+def do_search(chat_id, length, pattern, word, message_id=None, live=False):
     """Крутить пачки, пока не наберётся норма фильтра: 5 или 10 ников."""
     anagram_of = word if pattern == "anagram" else None
 
     if pattern == "anagram" and not anagram_of:
         show(chat_id, "filters", "Сначала пришли слово: Фильтры, «Из своего слова».",
-             kb_filters(pattern, word), message_id)
+             kb_filters(pattern, word, live=live), message_id)
         return
 
     if anagram_of:
@@ -478,7 +508,11 @@ def do_search(chat_id, length, pattern, word, message_id=None):
     target = config.TARGETS.get(pattern, config.DEFAULT_TARGET)
 
     def progress():
-        return "Найдено %d из %d, проверено %d" % (len(free), target, checked)
+        text = "Найдено %d из %d, проверено %d" % (len(free), target, checked)
+        if live and free:
+            text += "\n\n<blockquote>%s</blockquote>" % "\n".join(
+                "<b>@%s</b>" % n for n in free)
+        return text
 
     # во время поиска - своя картинка, бегущие точки и счётчик, результат
     # покажем потом. Счётчики заводим раньше: первая правка подписи сразу
@@ -528,7 +562,7 @@ def do_search(chat_id, length, pattern, word, message_id=None):
         text += ("\n\nTelegram притормозил проверку. Непроверенные ники "
                  "не показываю - через пару минут попробуй ещё раз.")
     show(chat_id, "results", text, kb_results(length, pattern, word),
-         message_id)
+         message_id, html=True)
 
 
 def set_anagram_word(chat_id, user_id, raw, prev, origin="main"):
@@ -563,7 +597,8 @@ def set_anagram_word(chat_id, user_id, raw, prev, origin="main"):
     show(chat_id, "filters",
          "Готово, слово «%s». Например: %s\n\n"
          "Теперь жми Поиск - переберу перестановки и покажу свободные."
-         % (word, example), kb_filters("anagram", word, origin))
+         % (word, example), kb_filters("anagram", word, origin,
+                                         live_enabled(user_id)))
 
 
 # --------------------------------------------------------------------- обработчики
@@ -607,7 +642,8 @@ def handle_callback(query):
         answer(query["id"], "Фильтр «%s» уже выбран" % PATTERN_TITLES[arg], True)
         return
 
-    if action == "reset" and pattern == DEFAULT_PATTERN and not word:
+    if (action == "reset" and pattern == DEFAULT_PATTERN and not word
+            and not live_enabled(user_id)):
         answer(query["id"], "Настройки и так стоят по умолчанию", True)
         return
 
@@ -620,13 +656,22 @@ def handle_callback(query):
             show(chat_id, "search", TEXT_SEARCH, kb_search(pattern, word), message_id)
         elif arg == "filters":
             show(chat_id, "filters", TEXT_FILTERS,
-                 kb_filters(pattern, word, origin), message_id)
+                 kb_filters(pattern, word, origin, live_enabled(user_id)),
+                 message_id)
 
     elif action == "run":
-        run_bg(do_search, chat_id, int(arg), pattern, word, message_id)
+        run_bg(do_search, chat_id, int(arg), pattern, word, message_id,
+               live_enabled(user_id))
+
+    elif action == "live":
+        live = not live_enabled(user_id)
+        _save_prefs(user_id, live=live)
+        show(chat_id, "filters", TEXT_FILTERS,
+             kb_filters(pattern, word, origin, live), message_id)
 
     elif action == "reset":
         remember_filter(user_id, DEFAULT_PATTERN, "")
+        _save_prefs(user_id, live=False)
         show(chat_id, "filters", "Настройки сброшены.\n\n" + TEXT_FILTERS,
              kb_filters(DEFAULT_PATTERN, "", origin), message_id)
 
@@ -640,7 +685,8 @@ def handle_callback(query):
         else:
             remember_filter(user_id, arg, word)
             show(chat_id, "filters", TEXT_FILTERS,
-                 kb_filters(arg, word, origin), message_id)
+                 kb_filters(arg, word, origin, live_enabled(user_id)),
+                 message_id)
 
 
 # --------------------------------------------------------------------------- запуск
