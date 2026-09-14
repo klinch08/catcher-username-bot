@@ -64,7 +64,7 @@ def _kind(html, name):
     return USER
 
 
-def check(name):
+def check(name, cancelled=None):
     """Вернуть (статус, кто_занимает).
 
     статус: FREE / TAKEN / RESERVED / ERROR
@@ -100,6 +100,10 @@ def check(name):
 
     # t.me и Fragment молчат про внутренний резерв Telegram - спрашиваем
     # его самого. Сюда доходят единицы, так что лимиты не трогаем.
+    # запрос к Telegram стоит в очереди до секунды - после отмены поиска
+    # незачем его ждать
+    if cancelled and cancelled():
+        return None, None
     sure = mtproto.confirm(name)
     if sure == mtproto.RESERVED:
         return RESERVED, None
@@ -124,8 +128,17 @@ def describe(status, kind):
     return "❓ не удалось проверить"
 
 
-def check_many(name_list):
-    """Проверить пачку ников параллельно. Возвращает [(ник, статус, kind)]."""
+def check_many(name_list, cancelled=None):
+    """Проверить пачку ников параллельно. Возвращает [(ник, статус, kind)].
+
+    cancelled - функция: вернула True - оставшиеся ники не проверяем
+    и отдаём со статусом None.
+    """
+    def one(name):
+        if cancelled and cancelled():
+            return name, None, None
+        return (name,) + check(name, cancelled)
+
     with ThreadPoolExecutor(max_workers=config.WORKERS) as pool:
-        results = list(pool.map(lambda n: (n,) + check(n), name_list))
+        results = list(pool.map(one, name_list))
     return results

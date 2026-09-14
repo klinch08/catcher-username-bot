@@ -51,6 +51,9 @@ _filters = {}
 # Всё происходит внутри него, новые сообщения не плодим.
 _last_msg = {}
 
+# Идущие поиски: chat_id -> Event. Кнопка отмены выставляет его.
+_searches = {}
+
 
 def log(*parts):
     """Пишем и в консоль, и в bot.log."""
@@ -308,6 +311,7 @@ ICON_CHECK = "✅"          # зелёная галочка
 ICON_REFRESH = "🔄"    # круговая стрелка
 ICON_DICE = "🎲"       # кубик
 ICON_BACK = "⬅️"       # стрелка влево
+ICON_CANCEL = "❌"     # крестик
 
 # Свои значки у фильтров - подменяются галочкой, когда фильтр выбран.
 PATTERN_ICONS = {
@@ -412,6 +416,12 @@ def kb_back(pattern, word, origin="main"):
     return rows
 
 
+def kb_cancel(pattern, word):
+    """Единственная кнопка под сообщением, пока идёт поиск."""
+    return [[btn(PAD + ICON_CANCEL + " Отменить поиск" + PAD,
+                 pack("cancel", "", pattern, word), "danger")]]
+
+
 def kb_results(length, pattern, word):
     return [
         [btn(PAD + ICON_REFRESH + " Ещё раз" + PAD,
@@ -443,11 +453,13 @@ TEXT_ANAGRAM = ("Пришли слово из 5 или 6 букв - соберу
 DOT_FRAMES = ("...", "..", ".", "..")
 
 
-def animate_dots(chat_id, message_id, stop, progress=None,
+def animate_dots(chat_id, message_id, stop, progress=None, keyboard=None,
                  base="Идёт поиск юзернеймов"):
     """Циклично гоняем точки в подписи, пока поиск не закончится.
 
     progress - функция, которая отдаёт строку со счётчиком найденного.
+    keyboard - кнопки под сообщением. Передаём при каждой правке: без них
+    Telegram снимает клавиатуру, и кнопка отмены пропала бы через 0,6 с.
 
     Проверяем флаг и перед правкой тоже: поиск может закончиться, пока мы
     спим, и тогда лишняя правка затрёт готовый результат вместе с кнопками.
@@ -457,7 +469,7 @@ def animate_dots(chat_id, message_id, stop, progress=None,
         text = base + DOT_FRAMES[i % len(DOT_FRAMES)]
         if progress:
             text += "\n\n" + progress()
-        edit_caption(chat_id, message_id, text, html=True)
+        edit_caption(chat_id, message_id, text, keyboard, html=True)
         i += 1
         stop.wait(0.6)
         if stop.is_set():
@@ -516,15 +528,20 @@ def do_search(chat_id, length, pattern, word, message_id=None, live=False):
 
     # во время поиска - своя картинка, бегущие точки и счётчик, результат
     # покажем потом. Счётчики заводим раньше: первая правка подписи сразу
-    message_id = show(chat_id, "searching", head, None, message_id)
+    cancel = threading.Event()
+    _searches[chat_id] = cancel
+    buttons = kb_cancel(pattern, word)
+
+    message_id = show(chat_id, "searching", head, buttons, message_id)
     stop = threading.Event()
     ticker = threading.Thread(target=animate_dots,
-                              args=(chat_id, message_id, stop, progress),
+                              args=(chat_id, message_id, stop, progress, buttons),
                               daemon=True)
     ticker.start()
 
     try:
-        while len(free) < target and time.time() - started < config.HARD_CAP:
+        while (len(free) < target and not cancel.is_set()
+               and time.time() - started < config.HARD_CAP):
             if not free and checked >= config.GIVE_UP_AFTER:
                 break
             pool = (names.anagrams(anagram_of, config.BATCH) if anagram_of
@@ -542,7 +559,9 @@ def do_search(chat_id, length, pattern, word, message_id=None, live=False):
                 break
             seen.update(batch)
 
-            for name, status, _kind in checker.check_many(batch):
+            for name, status, _kind in checker.check_many(batch, cancel.is_set):
+                if status is None:
+                    continue   # не проверяли: поиск отменили
                 checked += 1
                 if status == checker.FREE:
                     free.append(name)
@@ -553,10 +572,14 @@ def do_search(chat_id, length, pattern, word, message_id=None, live=False):
         # не выставить, точки будут крутиться вечно
         stop.set()
         ticker.join(timeout=3)
+        if _searches.get(chat_id) is cancel:
+            del _searches[chat_id]
 
     free.sort(key=names.readability, reverse=True)
     text = format_results(free[:target], checked,
                           time.time() - started, errors)
+    if cancel.is_set():
+        text = "Поиск отменён.\n\n" + text
     if not mtproto.available():
         # неподтверждённые ники в выдачу не идут, так что найдено меньше
         text += ("\n\nTelegram притормозил проверку. Непроверенные ники "
@@ -645,6 +668,15 @@ def handle_callback(query):
     if (action == "reset" and pattern == DEFAULT_PATTERN and not word
             and not live_enabled(user_id)):
         answer(query["id"], "Настройки и так стоят по умолчанию", True)
+        return
+
+    if action == "cancel":
+        search = _searches.get(chat_id)
+        if search and not search.is_set():
+            search.set()
+            answer(query["id"], "Останавливаю поиск")
+        else:
+            answer(query["id"], "Поиск уже закончился")
         return
 
     answer(query["id"])
