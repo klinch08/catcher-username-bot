@@ -519,8 +519,13 @@ def do_search(chat_id, length, pattern, word, message_id=None, live=False):
     checked = errors = 0
     target = config.TARGETS.get(pattern, config.DEFAULT_TARGET)
 
+    filter_title = PATTERN_TITLES.get(pattern, pattern)
+    if anagram_of:
+        filter_title += " (%s)" % anagram_of
+
     def progress():
-        text = "Найдено %d из %d, проверено %d" % (len(free), target, checked)
+        text = "Фильтр: %s\n\n" % filter_title
+        text += "Найдено %d из %d, проверено %d" % (len(free), target, checked)
         if live and free:
             text += "\n\n<blockquote>%s</blockquote>" % "\n".join(
                 "<b>@%s</b>" % n for n in free)
