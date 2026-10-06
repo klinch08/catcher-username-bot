@@ -4,7 +4,7 @@
 import re
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import config
 import fragment
@@ -129,7 +129,9 @@ def describe(status, kind):
 
 
 def check_many(name_list, cancelled=None):
-    """Проверить пачку ников параллельно. Возвращает [(ник, статус, kind)].
+    """Проверить пачку ников параллельно. Отдаёт (ник, статус, kind)
+    по мере готовности, а не после всей пачки: иначе счётчик в поиске
+    стоит на нуле, пока пачка не досчитается.
 
     cancelled - функция: вернула True - оставшиеся ники не проверяем
     и отдаём со статусом None.
@@ -140,5 +142,5 @@ def check_many(name_list, cancelled=None):
         return (name,) + check(name, cancelled)
 
     with ThreadPoolExecutor(max_workers=config.WORKERS) as pool:
-        results = list(pool.map(one, name_list))
-    return results
+        for future in as_completed([pool.submit(one, n) for n in name_list]):
+            yield future.result()
