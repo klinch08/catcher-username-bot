@@ -681,7 +681,13 @@ def handle_callback(query):
             search.set()
             answer(query["id"], "Останавливаю поиск")
         else:
-            answer(query["id"], "Поиск уже закончился")
+            # поиска в памяти нет, а кнопка висит: бот перезапускался
+            # посреди поиска. Убираем мёртвый экран, иначе точки и
+            # кнопка отмены так и останутся
+            answer(query["id"])
+            show(chat_id, "search",
+                 "Поиск прервался: бот перезапускался. Запусти ещё раз.\n\n"
+                 + TEXT_SEARCH, kb_search(pattern, word), message_id)
         return
 
     answer(query["id"])
